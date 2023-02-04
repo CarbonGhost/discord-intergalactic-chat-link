@@ -1,7 +1,7 @@
 use std::ops::Deref;
 use std::time::Duration;
 
-use env_file_reader::read_file;
+use intergalactic_chat::config::Config;
 use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS};
 use serenity::async_trait;
 use serenity::model::channel::Message;
@@ -13,34 +13,31 @@ use tokio;
 use tokio::sync::broadcast;
 use tokio::task;
 
-const MQ_CLIENT_ID: &str = "itergalactic_chat_client";
-const MQ_BROKER_IP: &str = "broker.hivemq.com";
-const MQ_BROKER_PORT: u16 = 1883;
-const MQ_TOPIC: &str = "intergalactic_chat/test";
-const DISCORD_CHANNEL: u64 = 1071016502746157146;
-const DISCORD_BOT_ID: u64 = 1071017546934915114;
+mod intergalactic_chat;
 
 #[tokio::main]
 async fn main() {
-	// Read the bot token from the enviornment
-	let env_vars = read_file(".env")
-		.expect("Error reading enviornment variables. Do you have a \".env\" file?");
-	let token = &env_vars["DISCORD_TOKEN"];
+	let config = Config::initialize("config.toml").expect("Failed to initialize config");
 
 	// Setup the MQTT client
-	let mut mq_options = MqttOptions::new(MQ_CLIENT_ID, MQ_BROKER_IP, MQ_BROKER_PORT);
+	let mut mq_options = MqttOptions::new(
+		&config.mqtt.client_id,
+		&config.mqtt.broker_ip,
+		config.mqtt.broker_port,
+	);
 	mq_options.set_keep_alive(Duration::from_secs(5));
 	let (mq_client, mut mq_event_loop) = AsyncClient::new(mq_options, 10);
 
-	// Create a Tokio channel for recieving messages accross threads
-	let (event_sender, mut event_receiver) = broadcast::channel::<Event>(10);
+	// Create a Tokio channel for receiving messages across threads
+	// Start the MQTT client on a separate thread and return it
+	let (event_sender, event_receiver) = broadcast::channel::<Event>(10);
+	let topic = config.mqtt.topic.clone();
 
-	// Start the MQTT client on a seperate thread and return it
 	let mq_client = task::spawn(async move {
 		mq_client
-			.subscribe(MQ_TOPIC, QoS::AtMostOnce)
+			.subscribe(topic, QoS::AtMostOnce)
 			.await
-			.expect("Error creaating MQTT subscription");
+			.expect("Error creating MQTT subscription");
 
 		// Start a new thread to continually advance the event loop
 		task::spawn(async move {
@@ -66,10 +63,11 @@ async fn main() {
 	let intents = GatewayIntents::GUILD_MESSAGES
 		| GatewayIntents::DIRECT_MESSAGES
 		| GatewayIntents::MESSAGE_CONTENT;
-	let mut discord_client = Client::builder(&token, intents)
+	let mut discord_client = Client::builder(&config.discord.token, intents)
 		.event_handler(DiscordHandler {
 			mq_client: mq_client.expect("Error joining threads"),
-			mq_event_reciever: event_receiver,
+			mq_event_receiver: event_receiver,
+			config: config,
 		})
 		.await
 		.expect("Error creating client");
@@ -83,7 +81,8 @@ async fn main() {
 
 struct DiscordHandler {
 	mq_client: AsyncClient,
-	mq_event_reciever: broadcast::Receiver<Event>,
+	mq_event_receiver: broadcast::Receiver<Event>,
+	config: Config,
 }
 
 #[async_trait]
@@ -92,7 +91,7 @@ impl EventHandler for DiscordHandler {
 	async fn ready(&self, context: Context, ready: Ready) {
 		println!("{} is connected!", ready.user.name);
 
-		let mut event_receiver = self.mq_event_reciever.resubscribe();
+		let mut event_receiver = self.mq_event_receiver.resubscribe();
 
 		loop {
 			let event = event_receiver.recv().await;
@@ -105,7 +104,7 @@ impl EventHandler for DiscordHandler {
 								.expect("Encoding error");
 							println!("Received: {s}");
 
-							ChannelId::from(DISCORD_CHANNEL)
+							ChannelId::from(self.config.discord.channel)
 								.send_message(&context, |m| m.content(s))
 								.await
 								.expect("Error sending message to Discord");
@@ -120,9 +119,9 @@ impl EventHandler for DiscordHandler {
 	}
 
 	async fn message(&self, context: Context, message: Message) {
-		if message.channel_id != ChannelId::from(DISCORD_CHANNEL) {
+		if message.channel_id != ChannelId::from(self.config.discord.channel) {
 			return;
-		} else if message.author.id == UserId::from(DISCORD_BOT_ID) {
+		} else if message.author.id == UserId::from(self.config.discord.bot_id) {
 			return;
 		}
 
@@ -131,7 +130,12 @@ impl EventHandler for DiscordHandler {
 		println!("Discord message: {}", &message.content);
 
 		mq_client
-			.publish(MQ_TOPIC, QoS::ExactlyOnce, false, message.content)
+			.publish(
+				&self.config.mqtt.topic,
+				QoS::ExactlyOnce,
+				false,
+				message.content,
+			)
 			.await
 			.expect("Error publishing MQTT message");
 	}
