@@ -1,0 +1,12 @@
+# https://github.com/rust-lang/rustfmt/blob/master/Configurations.md#fn_args_layout
+fn_args_layout = "Compressed"
+# https://github.com/rust-lang/rustfmt/blob/master/Configurations.md#fn_single_line
+fn_single_line = true
+# https://github.com/rust-lang/rustfmt/blob/master/Configurations.md#hard_tabs
+hard_tabs = true
+# https://github.com/rust-lang/rustfmt/blob/master/Configurations.md#group_imports
+group_imports = "StdExternalCrate"
+# https://github.com/rust-lang/rustfmt/blob/master/Configurations.md#struct_field_align_threshold
+struct_field_align_threshold = 20
+# https://github.com/rust-lang/rustfmt/blob/master/Configurations.md#wrap_comments
+wrap_comments = true
