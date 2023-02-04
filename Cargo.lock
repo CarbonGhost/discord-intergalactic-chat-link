@@ -242,6 +242,7 @@ dependencies = [
  "env-file-reader",
  "rumqttc",
  "serde",
+ "serde_json",
  "serenity",
  "tokio",
  "toml",
