@@ -9,9 +9,10 @@ use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::model::id::ChannelId;
 use serenity::model::prelude::{AttachmentType, UserId};
+use serenity::model::webhook::Webhook;
 use serenity::prelude::*;
-use tokio;
 use tokio::sync::broadcast;
+use tokio::{self, task};
 
 pub struct DiscordHandler {
 	pub mq_client: AsyncClient,
@@ -22,17 +23,21 @@ pub struct DiscordHandler {
 #[async_trait]
 impl EventHandler for DiscordHandler {
 	async fn ready(&self, context: Context, ready: Ready) {
-		println!(
-			"{} has successfully connected to the Discord gateway.",
-			ready.user.name
-		);
-
-		let channel = ChannelId::from(self.config.discord.channel);
-		let webhook_name = "Intergalactic Chat Link Webhook";
-
-		let webhook = get_link_webhook(channel, webhook_name, &context).await;
+		println!("{} successfully connected to Discord!", ready.user.name);
 
 		let mut event_receiver = self.mq_event_receiver.resubscribe();
+		let mut webhooks: Vec<Webhook> = Vec::new();
+
+		for channel in &self.config.discord.channels {
+			webhooks.push(
+				get_link_webhook(
+					ChannelId::from(channel.to_owned()),
+					"Intergalactic Chat Link Webhook",
+					&context,
+				)
+				.await,
+			);
+		}
 
 		loop {
 			// Process the event and ensure it's a valid Discord message. The loop
@@ -64,37 +69,52 @@ impl EventHandler for DiscordHandler {
 
 			println!("Received: {message:#?}");
 
-			match {
-				webhook
-					.execute(&context, false, |m| {
-						m.content(message.content);
-						message
-							.author
-							.avatar_url()
-							.and_then(|u| Some(m.avatar_url(u)));
-						m.username(message.author.name);
-						m.add_files(message.attachments.iter().fold(
-							Vec::<AttachmentType>::new(),
-							|mut files, attachment| {
-								let _ =
-									&files.push(AttachmentType::from(attachment.proxy_url.deref()));
-								files
-							},
-						));
+			// TODO: Maybe make this async.
+			for webhook in &webhooks {
+				let message = message.to_owned();
 
-						m
-					})
-					.await
-			} {
-				Ok(_) => (),
-				Err(e) => println!("Error sending Discord message {e}"),
-			};
+				if message.channel_id.as_u64() == webhook.channel_id.unwrap().as_u64() {
+					continue;
+				}
+
+				match {
+					webhook
+						.execute(&context, false, |m| {
+							m.content(message.content);
+							message
+								.author
+								.avatar_url()
+								.and_then(|u| Some(m.avatar_url(u)));
+							m.username(message.author.name);
+							m.add_files(message.attachments.iter().fold(
+								Vec::<AttachmentType>::new(),
+								|mut files, attachment| {
+									let _ = &files
+										.push(AttachmentType::from(attachment.proxy_url.deref()));
+									files
+								},
+							));
+
+							m
+						})
+						.await
+				} {
+					Ok(_) => (),
+					Err(e) => println!("Error sending Discord message {e}"),
+				};
+			}
 		}
 	}
 
 	async fn message(&self, _: Context, message: Message) {
 		// TODO: Look into a solution that doesn't ignore bots.
-		if message.channel_id != ChannelId::from(self.config.discord.channel) {
+		// TODO: Make this more efficient maybe?
+		if !self
+			.config
+			.discord
+			.channels
+			.contains(message.channel_id.as_u64())
+		{
 			return;
 		} else if message.author.id == UserId::from(self.config.discord.bot_id) {
 			return;

@@ -7,22 +7,22 @@ use std::io::Write;
 /// Struct representing the bot's configuration.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
-	pub mqtt: MqttConfig,
-	pub discord: DiscordConfig,
+	pub mqtt: Mqtt,
+	pub discord: Discord,
 }
 
 impl Config {
 	/// Creates a new empty [`Config`].
 	pub fn new() -> Config {
 		Config {
-			mqtt: MqttConfig {
+			mqtt: Mqtt {
 				client_id: String::new(),
 				broker_ip: String::new(),
 				broker_port: 0,
 				topic: String::new(),
 			},
-			discord: DiscordConfig {
-				channel: 0000000000000000000,
+			discord: Discord {
+				channels: Vec::from([0000000000000000000, 0000000000000000000]),
 				bot_id: 0000000000000000000,
 				token: String::new(),
 			},
@@ -83,7 +83,7 @@ impl Config {
 
 /// Struct for configuring the MQTT client.
 #[derive(Serialize, Deserialize, Clone)]
-pub struct MqttConfig {
+pub struct Mqtt {
 	pub client_id: String,
 	pub broker_ip: String,
 	pub broker_port: u16,
@@ -92,8 +92,8 @@ pub struct MqttConfig {
 
 /// Struct for configuring the Discord client.
 #[derive(Serialize, Deserialize, Clone)]
-pub struct DiscordConfig {
-	pub channel: u64,
+pub struct Discord {
+	pub channels: Vec<u64>,
 	pub bot_id: u64,
 	pub token: String,
 }

@@ -10,7 +10,7 @@ pub async fn poll_event_loop(mut event_loop: EventLoop, sender: Sender<Event>) {
 
 		match &event {
 			Ok(v) => {
-				sender.send(v.clone()).unwrap();
+				sender.send(v.to_owned()).unwrap();
 			}
 			Err(why) => {
 				println!("Error = {why:?}");
