@@ -1,0 +1,20 @@
+use rumqttc::{Event, EventLoop};
+use tokio::sync::broadcast::Sender;
+
+/// Continually polls the [`rumqttc::EventLoop`] and sends the results to a
+/// [`tokio::sync::broadcast::Sender`].
+// TODO: Needs proper error handling.
+pub async fn poll_event_loop(mut event_loop: EventLoop, sender: Sender<Event>) {
+	loop {
+		let event = event_loop.poll().await;
+
+		match &event {
+			Ok(v) => {
+				sender.send(v.clone()).unwrap();
+			}
+			Err(why) => {
+				println!("Error = {why:?}");
+			}
+		};
+	}
+}

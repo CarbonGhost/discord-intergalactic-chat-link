@@ -1,2 +1,3 @@
 pub mod config;
-pub mod bot;
+pub mod discord;
+pub mod mqtt;

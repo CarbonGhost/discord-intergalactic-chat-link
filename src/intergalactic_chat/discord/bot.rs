@@ -1,4 +1,5 @@
 use std::ops::Deref;
+use std::str::from_utf8;
 
 use crate::Config;
 use rumqttc::{AsyncClient, Event, Incoming, QoS};
@@ -20,54 +21,63 @@ pub struct DiscordHandler {
 #[async_trait]
 impl EventHandler for DiscordHandler {
 	async fn ready(&self, context: Context, ready: Ready) {
-		println!("{} is connected!", ready.user.name);
+		println!(
+			"{} has successfully connected to the Discord gateway.",
+			ready.user.name
+		);
 
 		let mut event_receiver = self.mq_event_receiver.resubscribe();
 
-		// Watch for incoming events and only send a Discord message if they are
-		// valid content.
 		loop {
-			let event = event_receiver.recv().await;
+			// Process the event and ensure it's a valid Discord message. The loop
+			// will simply return if a problem is found, as none of the issues are
+			// unrecoverable.
+			// TODO: This can definitely be done more efficiently!
+			let event = match event_receiver.recv().await {
+				Ok(event) => event,
+				Err(_) => continue,
+			};
 
-			match event {
-				Ok(event) => match event {
-					Event::Incoming(incoming) => match incoming {
-						Incoming::Publish(publish) => {
-							let s = std::str::from_utf8(publish.payload.deref())
-								.expect("Error parsing bytes");
-
-							match serde_json::from_str::<Message>(s) {
-								Ok(v) => {
-									println!("Received: {v:#?}");
-									ChannelId::from(self.config.discord.channel)
-										.send_message(&context, |m| {
-											m.content(v.content);
-											m.add_files(v.attachments.iter().fold(
-												Vec::<AttachmentType>::new(),
-												|mut acc, a| {
-													let _ = &acc.push(AttachmentType::from(
-														a.proxy_url.deref(),
-													));
-													acc
-												},
-											));
-
-											m
-										})
-										.await
-										.expect("Error sending message to Discord");
-								}
-								Err(_) => {
-									println!("Error deserializing JSON");
-								}
-							};
-						}
-						_ => (),
-					},
-					_ => (),
+			let payload = match event {
+				Event::Incoming(incoming) => match incoming {
+					Incoming::Publish(publish) => publish.payload,
+					_ => continue,
 				},
-				Err(why) => println!("ERR: {why:?}"),
-			}
+				_ => continue,
+			};
+
+			let s = match from_utf8(&payload) {
+				Ok(s) => s,
+				Err(_) => continue,
+			};
+
+			let message = match serde_json::from_str::<Message>(s) {
+				Ok(json) => json,
+				Err(_) => continue,
+			};
+
+			println!("Received: {message:#?}");
+
+			match {
+				ChannelId::from(self.config.discord.channel)
+					.send_message(&context, |m| {
+						m.content(message.content);
+						m.add_files(message.attachments.iter().fold(
+							Vec::<AttachmentType>::new(),
+							|mut files, attachment| {
+								let _ =
+									&files.push(AttachmentType::from(attachment.proxy_url.deref()));
+								files
+							},
+						));
+
+						m
+					})
+					.await
+			} {
+				Ok(_) => (),
+				Err(e) => println!("Error sending Discord message {e}"),
+			};
 		}
 	}
 
