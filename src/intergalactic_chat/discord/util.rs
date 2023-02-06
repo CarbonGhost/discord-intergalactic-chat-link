@@ -1,5 +1,8 @@
 use serenity::{
-	model::{prelude::ChannelId, webhook::Webhook},
+	model::{
+		prelude::{ChannelId, Embed, Message},
+		webhook::Webhook,
+	},
 	prelude::Context,
 };
 
@@ -24,4 +27,31 @@ pub async fn get_link_webhook(
 		},
 		Err(e) => panic!("Error getting webhooks: {e}"),
 	}
+}
+
+/// Builds a reply embed using the type provided by [`serenity::model::Message::referenced_message`].
+///
+/// Should only be used for webhooks.
+pub fn build_reply_for_webhook(rm: Box<Message>) -> serde_json::Value {
+	Embed::fake(|e| {
+		e.description(format!(
+			"**[Reply to:]({})** {}{}",
+			&rm.link(),
+			rm.content
+				.chars()
+				.take(30)
+				.collect::<String>()
+				.replace("\n", "")
+				.as_mut(),
+			if rm.content.len() > 100 {
+				"...".to_owned()
+			} else {
+				"".to_owned()
+			}
+		))
+		.footer(|e| {
+			e.icon_url(rm.author.face());
+			e.text(rm.author.name)
+		})
+	})
 }

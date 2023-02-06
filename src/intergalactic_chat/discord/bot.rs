@@ -1,18 +1,18 @@
 use std::ops::Deref;
 use std::str::from_utf8;
 
-use crate::intergalactic_chat::discord::util::get_link_webhook;
+use crate::intergalactic_chat::discord::util::{build_reply_for_webhook, get_link_webhook};
 use crate::Config;
 use rumqttc::{AsyncClient, Event, Incoming, QoS};
 use serenity::async_trait;
+use serenity::builder::ParseValue;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::model::id::ChannelId;
-use serenity::model::prelude::{AttachmentType, UserId};
+use serenity::model::prelude::AttachmentType;
 use serenity::model::webhook::Webhook;
 use serenity::prelude::*;
 use tokio::sync::broadcast;
-use tokio::{self, task};
 
 pub struct DiscordHandler {
 	pub mq_client: AsyncClient,
@@ -32,7 +32,7 @@ impl EventHandler for DiscordHandler {
 			webhooks.push(
 				get_link_webhook(
 					ChannelId::from(channel.to_owned()),
-					"Intergalactic Chat Link Webhook",
+					format!("Webhook for {}", ready.user.name).deref(),
 					&context,
 				)
 				.await,
@@ -44,32 +44,24 @@ impl EventHandler for DiscordHandler {
 			// will simply return if a problem is found, as none of the issues are
 			// unrecoverable.
 			// TODO: This can definitely be done more efficiently!
-			let event = match event_receiver.recv().await {
-				Ok(event) => event,
-				Err(_) => continue,
-			};
-
-			let payload = match event {
-				Event::Incoming(incoming) => match incoming {
-					Incoming::Publish(publish) => publish.payload,
+			let message = match event_receiver.recv().await {
+				Ok(event) => match event {
+					Event::Incoming(incoming) => match incoming {
+						Incoming::Publish(publish) => match from_utf8(&publish.payload) {
+							Ok(payload_str) => match serde_json::from_str::<Message>(payload_str) {
+								Ok(message) => message,
+								_ => continue,
+							},
+							_ => continue,
+						},
+						_ => continue,
+					},
 					_ => continue,
 				},
 				_ => continue,
 			};
 
-			let s = match from_utf8(&payload) {
-				Ok(s) => s,
-				Err(_) => continue,
-			};
-
-			let message = match serde_json::from_str::<Message>(s) {
-				Ok(json) => json,
-				Err(_) => continue,
-			};
-
-			println!("Received: {message:#?}");
-
-			// TODO: Maybe make this async.
+			// TODO: Maybe make this multi-threaded.
 			for webhook in &webhooks {
 				let message = message.to_owned();
 
@@ -81,19 +73,21 @@ impl EventHandler for DiscordHandler {
 					webhook
 						.execute(&context, false, |m| {
 							m.content(message.content);
-							message
-								.author
-								.avatar_url()
-								.and_then(|u| Some(m.avatar_url(u)));
+							m.avatar_url(message.author.face());
 							m.username(message.author.name);
+							m.allowed_mentions(|am| am.parse(ParseValue::Users));
 							m.add_files(message.attachments.iter().fold(
 								Vec::<AttachmentType>::new(),
-								|mut files, attachment| {
-									let _ = &files
-										.push(AttachmentType::from(attachment.proxy_url.deref()));
+								|mut files, f| {
+									files.push(AttachmentType::from(f.url.deref()));
 									files
 								},
 							));
+
+							// Add an embed for replies
+							message
+								.referenced_message
+								.and_then(|rm| Some(m.embeds(vec![build_reply_for_webhook(rm)])));
 
 							m
 						})
@@ -116,15 +110,15 @@ impl EventHandler for DiscordHandler {
 			.contains(message.channel_id.as_u64())
 		{
 			return;
-		} else if message.author.id == UserId::from(self.config.discord.bot_id) {
-			return;
 		} else if message.author.bot {
 			return;
 		}
 
 		let mq_client = &self.mq_client;
-
-		println!("Discord message: {}", &message.content);
+		let message_json = match serde_json::to_string(&message) {
+			Ok(json) => json,
+			Err(_) => return,
+		};
 
 		// TODO: This function currently just serializes and sends the entire Message
 		// as JSON, which can be optimized by removing unused fields.
@@ -133,9 +127,9 @@ impl EventHandler for DiscordHandler {
 				&self.config.mqtt.topic,
 				QoS::ExactlyOnce,
 				false,
-				serde_json::to_string(&message).expect("Error serializing Discord message"),
+				message_json,
 			)
 			.await
-			.expect("Error publishing MQTT message");
+			.ok();
 	}
 }
