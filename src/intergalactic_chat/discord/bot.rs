@@ -1,6 +1,7 @@
 use std::ops::Deref;
 use std::str::from_utf8;
 
+use crate::intergalactic_chat::discord::util::get_link_webhook;
 use crate::Config;
 use rumqttc::{AsyncClient, Event, Incoming, QoS};
 use serenity::async_trait;
@@ -25,6 +26,11 @@ impl EventHandler for DiscordHandler {
 			"{} has successfully connected to the Discord gateway.",
 			ready.user.name
 		);
+
+		let channel = ChannelId::from(self.config.discord.channel);
+		let webhook_name = "Intergalactic Chat Link Webhook";
+
+		let webhook = get_link_webhook(channel, webhook_name, &context).await;
 
 		let mut event_receiver = self.mq_event_receiver.resubscribe();
 
@@ -59,9 +65,14 @@ impl EventHandler for DiscordHandler {
 			println!("Received: {message:#?}");
 
 			match {
-				ChannelId::from(self.config.discord.channel)
-					.send_message(&context, |m| {
+				webhook
+					.execute(&context, false, |m| {
 						m.content(message.content);
+						message
+							.author
+							.avatar_url()
+							.and_then(|u| Some(m.avatar_url(u)));
+						m.username(message.author.name);
 						m.add_files(message.attachments.iter().fold(
 							Vec::<AttachmentType>::new(),
 							|mut files, attachment| {
