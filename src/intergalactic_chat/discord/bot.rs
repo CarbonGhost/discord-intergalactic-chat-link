@@ -93,9 +93,12 @@ impl EventHandler for DiscordHandler {
 	}
 
 	async fn message(&self, _: Context, message: Message) {
+		// TODO: Look into a solution that doesn't ignore bots.
 		if message.channel_id != ChannelId::from(self.config.discord.channel) {
 			return;
 		} else if message.author.id == UserId::from(self.config.discord.bot_id) {
+			return;
+		} else if message.author.bot {
 			return;
 		}
 
