@@ -13,6 +13,7 @@ use serenity::model::prelude::AttachmentType;
 use serenity::model::webhook::Webhook;
 use serenity::prelude::*;
 use tokio::sync::broadcast;
+use tokio::task;
 
 pub struct DiscordHandler {
 	pub mq_client: AsyncClient,
@@ -23,7 +24,13 @@ pub struct DiscordHandler {
 #[async_trait]
 impl EventHandler for DiscordHandler {
 	async fn ready(&self, context: Context, ready: Ready) {
-		println!("{} successfully connected to Discord!", ready.user.name);
+		println!(
+			r##"
+{} connected to Discord!
+Invite with: https://discord.com/api/oauth2/authorize?client_id={}&permissions=1789592463424&scope=bot
+"##,
+			ready.user.name, ready.application.id
+		);
 
 		let mut event_receiver = self.mq_event_receiver.resubscribe();
 		let mut webhooks: Vec<Webhook> = Vec::new();
@@ -39,11 +46,11 @@ impl EventHandler for DiscordHandler {
 			);
 		}
 
+		// Process the event and ensure it's a valid Discord message. The loop
+		// will simply return if a problem is found, as none of the issues are
+		// unrecoverable.
+		// TODO: This can definitely be done more efficiently!
 		loop {
-			// Process the event and ensure it's a valid Discord message. The loop
-			// will simply return if a problem is found, as none of the issues are
-			// unrecoverable.
-			// TODO: This can definitely be done more efficiently!
 			let message = match event_receiver.recv().await {
 				Ok(event) => match event {
 					Event::Incoming(incoming) => match incoming {
@@ -64,38 +71,42 @@ impl EventHandler for DiscordHandler {
 			// TODO: Maybe make this multi-threaded.
 			for webhook in &webhooks {
 				let message = message.to_owned();
+				let context = context.to_owned();
+				let webhook = webhook.to_owned();
 
-				if message.channel_id.as_u64() == webhook.channel_id.unwrap().as_u64() {
-					continue;
-				}
+				task::spawn(async move {
+					if message.channel_id.as_u64() == webhook.channel_id.unwrap().as_u64() {
+						return;
+					}
 
-				match {
-					webhook
-						.execute(&context, false, |m| {
-							m.content(message.content);
-							m.avatar_url(message.author.face());
-							m.username(message.author.name);
-							m.allowed_mentions(|am| am.parse(ParseValue::Users));
-							m.add_files(message.attachments.iter().fold(
-								Vec::<AttachmentType>::new(),
-								|mut files, f| {
-									files.push(AttachmentType::from(f.url.deref()));
-									files
-								},
-							));
+					match {
+						webhook
+							.execute(&context, false, |m| {
+								m.content(message.content);
+								m.avatar_url(message.author.face());
+								m.username(message.author.name);
+								m.allowed_mentions(|am| am.parse(ParseValue::Users));
+								m.add_files(message.attachments.iter().fold(
+									Vec::<AttachmentType>::new(),
+									|mut files, f| {
+										files.push(AttachmentType::from(f.url.deref()));
+										files
+									},
+								));
 
-							// Add an embed for replies
-							message
-								.referenced_message
-								.and_then(|rm| Some(m.embeds(vec![build_reply_for_webhook(rm)])));
+								// Add an embed for replies
+								message.referenced_message.and_then(|rm| {
+									Some(m.embeds(vec![build_reply_for_webhook(rm)]))
+								});
 
-							m
-						})
-						.await
-				} {
-					Ok(_) => (),
-					Err(e) => println!("Error sending Discord message {e}"),
-				};
+								m
+							})
+							.await
+					} {
+						Ok(_) => (),
+						Err(e) => println!("Error sending Discord message {e}"),
+					};
+				});
 			}
 		}
 	}
