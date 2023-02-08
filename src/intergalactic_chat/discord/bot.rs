@@ -1,24 +1,26 @@
 use std::ops::Deref;
 use std::str::from_utf8;
+use std::sync::Arc;
 
-use crate::intergalactic_chat::discord::util::{build_reply_for_webhook, get_link_webhook};
+use crate::intergalactic_chat::discord::util::{get_link_webhook, propagate_message};
 use crate::Config;
 use rumqttc::{AsyncClient, Event, Incoming, QoS};
 use serenity::async_trait;
-use serenity::builder::ParseValue;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::model::id::ChannelId;
-use serenity::model::prelude::AttachmentType;
+use serenity::model::prelude::{GuildId, MessageId, MessageUpdateEvent};
 use serenity::model::webhook::Webhook;
 use serenity::prelude::*;
 use tokio::sync::broadcast;
-use tokio::task;
+
+use super::util::MessageCache;
 
 pub struct DiscordHandler {
 	pub mq_client: AsyncClient,
 	pub mq_event_receiver: broadcast::Receiver<Event>,
 	pub config: Config,
+	pub message_cache: Mutex<MessageCache>,
 }
 
 #[async_trait]
@@ -68,46 +70,65 @@ Invite with: https://discord.com/api/oauth2/authorize?client_id={}&permissions=1
 				_ => continue,
 			};
 
-			// TODO: Maybe make this multi-threaded.
-			for webhook in &webhooks {
-				let message = message.to_owned();
-				let context = context.to_owned();
-				let webhook = webhook.to_owned();
+			let x = propagate_message(message, &context, &webhooks).await;
+			self.message_cache.lock().await.push(x.0, x.1);
 
-				task::spawn(async move {
-					if message.channel_id.as_u64() == webhook.channel_id.unwrap().as_u64() {
-						return;
-					}
+			println!(
+				"{}",
+				serde_json::to_string(&self.message_cache.lock().await.cache).unwrap()
+			);
+			println!(
+				"SIZE: {}",
+				serde_json::to_string(&self.message_cache.lock().await.cache)
+					.unwrap()
+					.as_bytes()
+					.len()
+			);
+		}
+	}
 
-					match {
-						webhook
-							.execute(&context, false, |m| {
-								m.content(message.content);
-								m.avatar_url(message.author.face());
-								m.username(message.author.name);
-								m.allowed_mentions(|am| am.parse(ParseValue::Users));
-								m.add_files(message.attachments.iter().fold(
-									Vec::<AttachmentType>::new(),
-									|mut files, f| {
-										files.push(AttachmentType::from(f.url.deref()));
-										files
-									},
-								));
+	async fn message_delete(
+		&self, context: Context, _: ChannelId, deleted_message_id: MessageId, _: Option<GuildId>,
+	) {
+		let c = &self.message_cache.lock().await;
+		let cache_value = c.cache.get_key_value(&deleted_message_id);
 
-								// Add an embed for replies
-								message.referenced_message.and_then(|rm| {
-									Some(m.embeds(vec![build_reply_for_webhook(rm)]))
-								});
+		let messages = match cache_value {
+			Some(v) => v,
+			None => return,
+		};
 
-								m
-							})
-							.await
-					} {
-						Ok(_) => (),
-						Err(e) => println!("Error sending Discord message {e}"),
-					};
-				});
-			}
+		for i in messages.1 {
+			i.related_channel_id
+				.delete_message(&context, i.related_message_id)
+				.await
+				.expect("Error deleting discord message");
+		}
+	}
+
+	async fn message_update(&self, context: Context, new_data: MessageUpdateEvent) {
+		let new_content = match new_data.content {
+			Some(v) => v,
+			None => return,
+		};
+
+		let c = &self.message_cache.lock().await;
+		let cache_value = c.cache.get_key_value(&new_data.id);
+
+		let messages = match cache_value {
+			Some(v) => v,
+			None => return,
+		};
+
+		for i in messages.1 {
+			Webhook::from_id(&context, i.related_webhook_id)
+				.await
+				.expect("Error getting webhook from id")
+				.edit_message(&context, i.related_message_id, |m| {
+					m.content(new_content.clone())
+				})
+				.await
+				.expect("Error editing webhook message");
 		}
 	}
 

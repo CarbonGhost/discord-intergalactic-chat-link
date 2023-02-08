@@ -12,8 +12,8 @@ pub async fn poll_event_loop(mut event_loop: EventLoop, sender: Sender<Event>) {
 			Ok(v) => {
 				let _ = sender.send(v.to_owned());
 			}
-			Err(why) => {
-				println!("Error = {why:?}");
+			Err(e) => {
+				println!("MQTT error: {e:?}");
 			}
 		};
 	}

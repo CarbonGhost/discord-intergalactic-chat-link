@@ -7,7 +7,7 @@ jobs:
     name: Build Linux
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -24,7 +24,7 @@ jobs:
     name: Build Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -34,5 +34,5 @@ jobs:
           args: --release
       - uses: actions/upload-artifact@v3
         with:
-          name: Build Linux
+          name: Build Windows
           path: target/release/discord-intergalactic-chat-link.exe

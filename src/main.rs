@@ -1,7 +1,9 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::intergalactic_chat::discord::bot::DiscordHandler;
 use intergalactic_chat::config::Config;
+use intergalactic_chat::discord::util::MessageCache;
 use intergalactic_chat::mqtt::poll_event_loop;
 use rumqttc::{AsyncClient, Event, MqttOptions, QoS};
 use serenity::prelude::*;
@@ -13,6 +15,7 @@ mod intergalactic_chat;
 #[tokio::main]
 async fn main() {
 	let config = Config::initialize("config.toml").expect("Failed to initialize the config");
+	let message_cache = Mutex::new(MessageCache::new(config.discord.channels.len() * 10));
 
 	let mut mq_options = MqttOptions::new(
 		&config.mqtt.client_id,
@@ -45,6 +48,7 @@ async fn main() {
 			mq_client: mq_client.expect("Threading error"),
 			mq_event_receiver: event_receiver,
 			config,
+			message_cache,
 		})
 		.await
 		.expect("Error creating Discord client");
