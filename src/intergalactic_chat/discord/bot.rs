@@ -2,7 +2,9 @@ use std::ops::Deref;
 use std::str::from_utf8;
 use std::sync::Arc;
 
-use crate::intergalactic_chat::discord::util::{get_link_webhook, propagate_message};
+use crate::intergalactic_chat::discord::util::{
+	execute_message_for_webhook, get_link_webhook, CachedRelated,
+};
 use crate::Config;
 use rumqttc::{AsyncClient, Event, Incoming, QoS};
 use serenity::async_trait;
@@ -13,6 +15,7 @@ use serenity::model::prelude::{GuildId, MessageId, MessageUpdateEvent};
 use serenity::model::webhook::Webhook;
 use serenity::prelude::*;
 use tokio::sync::broadcast;
+use tokio::task;
 
 use super::util::MessageCache;
 
@@ -20,7 +23,7 @@ pub struct DiscordHandler {
 	pub mq_client: AsyncClient,
 	pub mq_event_receiver: broadcast::Receiver<Event>,
 	pub config: Config,
-	pub message_cache: Mutex<MessageCache>,
+	pub message_cache: Arc<Mutex<MessageCache>>,
 }
 
 #[async_trait]
@@ -70,20 +73,37 @@ Invite with: https://discord.com/api/oauth2/authorize?client_id={}&permissions=1
 				_ => continue,
 			};
 
-			let x = propagate_message(message, &context, &webhooks).await;
-			self.message_cache.lock().await.push(x.0, x.1);
+			self.message_cache.lock().await.push(message.id, Vec::new());
 
-			println!(
-				"{}",
-				serde_json::to_string(&self.message_cache.lock().await.cache).unwrap()
-			);
-			println!(
-				"SIZE: {}",
-				serde_json::to_string(&self.message_cache.lock().await.cache)
-					.unwrap()
-					.as_bytes()
-					.len()
-			);
+			for webhook in &webhooks {
+				let message = message.to_owned();
+				let context = context.to_owned();
+				let webhook = webhook.to_owned();
+				let message_cache = Arc::clone(&self.message_cache);
+				let message_id = message.id;
+
+				task::spawn(async move {
+					let m = execute_message_for_webhook(message, &context, &webhook).await;
+
+					match m {
+						Ok(m) => match m {
+							Some(m) => {
+								message_cache.lock().await.push_into_v(
+									message_id,
+									CachedRelated {
+										related_channel_id: m.channel_id,
+										related_message_id: m.id,
+										related_webhook_id: webhook.id,
+									},
+								);
+								()
+							}
+							None => return,
+						},
+						Err(e) => println!("Error sending message {e}"),
+					}
+				});
+			}
 		}
 	}
 

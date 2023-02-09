@@ -9,7 +9,6 @@ use serenity::{
 	},
 	prelude::Context,
 };
-use tokio::task;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MessageCache {
@@ -50,6 +49,16 @@ impl MessageCache {
 		self.cache.insert(k, v);
 
 		self
+	}
+
+	pub fn push_into_v(&mut self, k: MessageId, v: CachedRelated) -> &mut Self {
+		self.cache.entry(k).and_modify(|e| e.push(v));
+
+		self
+	}
+
+	pub fn remove(&mut self, k: MessageId) -> &mut Self {
+		self.remove(k)
 	}
 }
 
@@ -103,66 +112,34 @@ pub fn build_reply_for_webhook(rm: Box<Message>) -> serde_json::Value {
 	})
 }
 
-pub async fn propagate_message(
-	message: Message, context: &Context, webhooks: &Vec<Webhook>,
-) -> (MessageId, Vec<CachedRelated>) {
-	let mut sent_webhooks: Vec<CachedRelated> = Vec::new();
-
-	// TODO:
-	// This code currently awaits a response from the Discord API for every message
-	// sent. Can probably be refactored with a mutex so multiple messages can be
-	// sent at once.
-	for webhook in webhooks {
-		// TODO: Can this be done without taking ownership?t
-		let message = message.to_owned();
-		let context = context.to_owned();
-		let webhook = webhook.to_owned();
-
-		task::spawn(async move {
-			if message.channel_id.as_u64() == webhook.channel_id.unwrap().as_u64() {
-				return None;
-			}
-
-			let res = webhook.execute(&context, true, |wh| {
-				wh.content(message.content);
-				wh.avatar_url(message.author.face());
-				wh.username(message.author.name);
-				wh.allowed_mentions(|am| am.parse(ParseValue::Users));
-				wh.add_files(message.attachments.iter().fold(
-					Vec::<AttachmentType>::new(),
-					|mut files, f| {
-						files.push(AttachmentType::from(f.url.deref()));
-
-						files
-					},
-				));
-
-				// Add an embed for replies
-				message
-					.referenced_message
-					.and_then(|rm| Some(wh.embeds(vec![build_reply_for_webhook(rm)])));
-
-				wh
-			});
-
-			match res.await {
-				Ok(msg) => Some(msg.unwrap()),
-				Err(e) => {
-					println!("Error sending Discord message {e}");
-					None
-				}
-			}
-		})
-		.await
-		.unwrap()
-		.and_then(|v| {
-			Some(sent_webhooks.push(CachedRelated {
-				related_channel_id: v.channel_id,
-				related_message_id: v.id,
-				related_webhook_id: v.webhook_id.expect("Wasn't a webhook..."),
-			}))
-		});
+pub async fn execute_message_for_webhook(
+	message: Message, context: &Context, webhook: &Webhook,
+) -> Result<Option<Message>, serenity::Error> {
+	if message.channel_id.as_u64() == webhook.channel_id.unwrap().as_u64() {
+		return Ok(None);
 	}
 
-	(message.id, sent_webhooks)
+	let x = webhook.execute(&context, true, |wh| {
+		wh.content(message.content);
+		wh.avatar_url(message.author.face());
+		wh.username(message.author.name);
+		wh.allowed_mentions(|am| am.parse(ParseValue::Users));
+		wh.add_files(message.attachments.iter().fold(
+			Vec::<AttachmentType>::new(),
+			|mut files, f| {
+				files.push(AttachmentType::from(f.url.deref()));
+
+				files
+			},
+		));
+
+		// Add an embed for replies
+		message
+			.referenced_message
+			.and_then(|rm| Some(wh.embeds(vec![build_reply_for_webhook(rm)])));
+
+		wh
+	});
+
+	x.await
 }

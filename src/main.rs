@@ -15,7 +15,9 @@ mod intergalactic_chat;
 #[tokio::main]
 async fn main() {
 	let config = Config::initialize("config.toml").expect("Failed to initialize the config");
-	let message_cache = Mutex::new(MessageCache::new(config.discord.channels.len() * 10));
+	let message_cache = Arc::new(Mutex::new(MessageCache::new(
+		config.discord.channels.len() * 10,
+	)));
 
 	let mut mq_options = MqttOptions::new(
 		&config.mqtt.client_id,
