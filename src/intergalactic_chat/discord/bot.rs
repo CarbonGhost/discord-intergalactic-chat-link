@@ -1,10 +1,9 @@
 use std::ops::Deref;
+use std::process::exit;
 use std::str::from_utf8;
 use std::sync::Arc;
 
-use crate::intergalactic_chat::discord::util::{
-	execute_message_for_webhook, get_link_webhook, CachedRelated,
-};
+use crate::intergalactic_chat::discord::util::{execute_message_for_webhook, get_link_webhook};
 use crate::Config;
 use rumqttc::{AsyncClient, Event, Incoming, QoS};
 use serenity::async_trait;
@@ -15,9 +14,9 @@ use serenity::model::prelude::{GuildId, MessageId, MessageUpdateEvent};
 use serenity::model::webhook::Webhook;
 use serenity::prelude::*;
 use tokio::sync::broadcast;
-use tokio::task;
+use tokio::{signal, task};
 
-use super::util::MessageCache;
+use super::cache::{CacheValue, MessageCache};
 
 pub struct DiscordHandler {
 	pub mq_client: AsyncClient,
@@ -29,13 +28,7 @@ pub struct DiscordHandler {
 #[async_trait]
 impl EventHandler for DiscordHandler {
 	async fn ready(&self, context: Context, ready: Ready) {
-		println!(
-			r##"
-{} connected to Discord!
-Invite with: https://discord.com/api/oauth2/authorize?client_id={}&permissions=1789592463424&scope=bot
-"##,
-			ready.user.name, ready.application.id
-		);
+		println!("{} connected to Discord!\nInvite with: https://discord.com/api/oauth2/authorize?client_id={}&permissions=1789592463424&scope=bot", ready.user.name, ready.application.id);
 
 		let mut event_receiver = self.mq_event_receiver.resubscribe();
 		let mut webhooks: Vec<Webhook> = Vec::new();
@@ -51,21 +44,39 @@ Invite with: https://discord.com/api/oauth2/authorize?client_id={}&permissions=1
 			);
 		}
 
+		let message_cache = Arc::clone(&self.message_cache);
+
+		task::spawn(async move {
+			loop {
+				match signal::ctrl_c().await {
+					Ok(()) => {
+						Arc::clone(&message_cache)
+							.lock()
+							.await
+							.to_owned()
+							.write_to_file(".cache")
+							.unwrap();
+						
+						println!("Goodbye!");
+
+						exit(0)
+					}
+					Err(e) => {
+						eprintln!("Unable to listen for shutdown signal: {e}");
+					}
+				}
+			}
+		});
+
 		// Process the event and ensure it's a valid Discord message. The loop
 		// will simply return if a problem is found, as none of the issues are
 		// unrecoverable.
 		// TODO: This can definitely be done more efficiently!
 		loop {
 			let message = match event_receiver.recv().await {
-				Ok(event) => match event {
-					Event::Incoming(incoming) => match incoming {
-						Incoming::Publish(publish) => match from_utf8(&publish.payload) {
-							Ok(payload_str) => match serde_json::from_str::<Message>(payload_str) {
-								Ok(message) => message,
-								_ => continue,
-							},
-							_ => continue,
-						},
+				Ok(Event::Incoming(Incoming::Publish(p))) => match from_utf8(&p.payload) {
+					Ok(p) => match serde_json::from_str::<Message>(p) {
+						Ok(p) => p,
 						_ => continue,
 					},
 					_ => continue,
@@ -88,20 +99,21 @@ Invite with: https://discord.com/api/oauth2/authorize?client_id={}&permissions=1
 					match m {
 						Ok(m) => match m {
 							Some(m) => {
-								message_cache.lock().await.push_into_v(
+								message_cache.lock().await.push_into_value(
 									message_id,
-									CachedRelated {
+									CacheValue {
 										related_channel_id: m.channel_id,
 										related_message_id: m.id,
 										related_webhook_id: webhook.id,
 									},
 								);
-								()
 							}
-							None => return,
+							None => (),
 						},
 						Err(e) => println!("Error sending message {e}"),
 					}
+
+					println!("{:?}", message_cache.lock().await)
 				});
 			}
 		}
@@ -110,8 +122,8 @@ Invite with: https://discord.com/api/oauth2/authorize?client_id={}&permissions=1
 	async fn message_delete(
 		&self, context: Context, _: ChannelId, deleted_message_id: MessageId, _: Option<GuildId>,
 	) {
-		let c = &self.message_cache.lock().await;
-		let cache_value = c.cache.get_key_value(&deleted_message_id);
+		let c = &mut self.message_cache.lock().await;
+		let cache_value = c.get_entry(&deleted_message_id);
 
 		let messages = match cache_value {
 			Some(v) => v,
@@ -124,6 +136,8 @@ Invite with: https://discord.com/api/oauth2/authorize?client_id={}&permissions=1
 				.await
 				.expect("Error deleting discord message");
 		}
+
+		c.remove(&deleted_message_id);
 	}
 
 	async fn message_update(&self, context: Context, new_data: MessageUpdateEvent) {
@@ -133,7 +147,7 @@ Invite with: https://discord.com/api/oauth2/authorize?client_id={}&permissions=1
 		};
 
 		let c = &self.message_cache.lock().await;
-		let cache_value = c.cache.get_key_value(&new_data.id);
+		let cache_value = c.get_entry(&new_data.id);
 
 		let messages = match cache_value {
 			Some(v) => v,

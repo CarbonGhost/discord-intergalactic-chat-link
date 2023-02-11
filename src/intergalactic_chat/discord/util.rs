@@ -1,66 +1,13 @@
-use std::{collections::HashMap, ops::Deref};
+use std::ops::Deref;
 
-use serde::{Deserialize, Serialize};
 use serenity::{
 	builder::ParseValue,
 	model::{
-		prelude::{AttachmentType, ChannelId, Embed, Message, MessageId, WebhookId},
+		prelude::{AttachmentType, ChannelId, Embed, Message},
 		webhook::Webhook,
 	},
 	prelude::Context,
 };
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct MessageCache {
-	/// The maximum number of entires the cache can hold before removing old ones.
-	size: usize,
-	/// A hash map representing the cached values.
-	///
-	/// The key represents the original message sent by the user and the value
-	/// contains data related to messages the bot has posted.
-	pub cache: HashMap<MessageId, Vec<CachedRelated>>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct CachedRelated {
-	pub related_channel_id: ChannelId,
-	pub related_message_id: MessageId,
-	pub related_webhook_id: WebhookId,
-}
-
-impl MessageCache {
-	pub fn new(size: usize) -> Self {
-		Self {
-			size,
-			cache: HashMap::new(),
-		}
-	}
-
-	pub fn push(&mut self, k: MessageId, v: Vec<CachedRelated>) -> &mut Self {
-		// Remove 1 item from the map if it is larger than `size`
-		if &self.cache.len() == &self.size {
-			let keys: Vec<_> = { self.cache.keys().take(1).copied().collect() };
-
-			for key in keys {
-				self.cache.remove(&key);
-			}
-		}
-
-		self.cache.insert(k, v);
-
-		self
-	}
-
-	pub fn push_into_v(&mut self, k: MessageId, v: CachedRelated) -> &mut Self {
-		self.cache.entry(k).and_modify(|e| e.push(v));
-
-		self
-	}
-
-	pub fn remove(&mut self, k: MessageId) -> &mut Self {
-		self.remove(k)
-	}
-}
 
 /// Get the webhook for the linked channel, if the channel doesn't already
 /// have one create a new one.
@@ -97,7 +44,7 @@ pub fn build_reply_for_webhook(rm: Box<Message>) -> serde_json::Value {
 				.chars()
 				.take(30)
 				.collect::<String>()
-				.replace("\n", "")
+				.replace('\n', "")
 				.as_mut(),
 			if rm.content.len() > 100 {
 				"...".to_owned()
@@ -136,7 +83,7 @@ pub async fn execute_message_for_webhook(
 		// Add an embed for replies
 		message
 			.referenced_message
-			.and_then(|rm| Some(wh.embeds(vec![build_reply_for_webhook(rm)])));
+			.map(|rm| wh.embeds(vec![build_reply_for_webhook(rm)]));
 
 		wh
 	});
