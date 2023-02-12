@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
+use std::ops::Deref;
+use toml::toml;
 
 /// Struct representing the bot's configuration.
 #[derive(Serialize, Deserialize, Clone)]
@@ -12,23 +15,6 @@ pub struct Config {
 }
 
 impl Config {
-	/// Creates a new empty [`Config`].
-	pub fn new() -> Config {
-		Config {
-			mqtt: Mqtt {
-				client_id: String::new(),
-				broker_ip: String::new(),
-				broker_port: 0,
-				topic: String::new(),
-			},
-			discord: Discord {
-				channels: Vec::from([0000000000000000000, 0000000000000000000]),
-				bot_id: 0000000000000000000,
-				token: String::new(),
-			},
-		}
-	}
-
 	/// Attempts to read the config file (`path`). If the file does not exist
 	/// it attempts to create a new one and write an empty config. Reads and
 	/// then returns a [`Config`].
@@ -44,40 +30,54 @@ impl Config {
 	/// - There is an error writing the file.
 	/// - There is an error reading the file.
 	pub fn initialize(path: &str) -> Result<Config, ()> {
-		let mut file = match File::open(path) {
-			Ok(f) => f,
-			Err(e) => match e.kind() {
-				ErrorKind::NotFound => match File::create(path) {
-					Ok(mut f) => match toml::to_string_pretty::<Config>(&Config::new()) {
-						Ok(c) => {
-							match f.write_all(c.as_bytes()) {
-								Ok(_) => (),
-								Err(e) => panic!("Error writing {path}: {e}"),
-							}
-
-							f
-						}
-						Err(e) => panic!("Error serializing: {e}"),
-					},
-					Err(e) => panic!("Error creating {path}: {e}"),
-				},
-				_ => panic!("Error opening {path}: {e}"),
-			},
-		};
-
 		let mut buf = String::new();
+		let default_config = String::from(
+			r#"
+# This is the configuration file for your bot, make sure it is valid
+# before starting the bot.
 
-		let config = match file.read_to_string(&mut buf) {
-			Ok(_) => match toml::from_str::<Config>(&buf) {
-				Ok(toml) => toml,
-				Err(e) => panic!(
-					"Error deserializing {path}: {e} - Make sure your configuration is valid"
-				),
-			},
-			Err(e) => panic!("Error reading {path}: {e} - Make sure this file exists"),
-		};
+# For help and more information about the bot go 
+# to: https://github.com/CarbonGhost/discord-intergalactic-chat-link
 
-		Ok(config)
+[mqtt]
+broker_ip = "localhost"				# The IP address of your broker server.
+broker_port = 1883						# The port the server is using, by default "1883".
+client_id = "bot"							# The client ID used to connect to the MQTT server.
+topic = "example/topic"				# The topic you wish to send / receive messages through.
+
+[discord]
+bot_id = 0000000000000000000	# The application ID of your bot, found via the Discord Developer Portal.
+# A list of channels IDs for channels you wish for the bot to link, 
+# separated by commas.
+# You can have any number of channels on any number of servers, but the
+# bot must have access to them and be able to create a webhook.
+channels = [
+	0000000000000000000,
+	0000000000000000000,
+	0000000000000000000,
+]
+# The bot's token, found via the Discord Developer portal.
+# If you are reporting an issue make sure to omit this value!
+token = "XXXXXXXXXXXXXXXXXXXXXXXXXX.XXXXXX.XXXXXXXX-XXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+		"#,
+		);
+		let mut file = OpenOptions::new()
+			.create(true)
+			.read(true)
+			.write(true)
+			.open(path)
+			.expect(&format!("Error trying to open {path}"));
+		file.read_to_string(&mut buf)
+			.expect(&format!("Error trying to read {path}"));
+
+		if buf.len() == 0 {
+			file.write_all(default_config.as_bytes())
+				.expect(&format!("Error trying to write to {path}"));
+
+			Ok(toml::from_str::<Self>(&default_config).expect("Your configuration is invalid, double check you have entered the correct information"))
+		} else {
+			Ok(toml::from_str::<Self>(buf.deref()).expect("Your configuration is invalid, double check you have entered the correct information"))
+		}
 	}
 }
 
