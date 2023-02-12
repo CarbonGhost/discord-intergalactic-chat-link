@@ -33,6 +33,9 @@ pub async fn run(
 			"This user has already been banned. Are you looking for the `/network-unban` command?"
 				.to_owned()
 		} else {
+			user.bot.then(|| "You cannot network ban bot users, if you wish to achieve the same result, try updating their permissions"
+			.to_owned());
+
 			let reason = if let CommandDataOptionValue::String(reason) = reason_option {
 				reason.to_owned()
 			} else {

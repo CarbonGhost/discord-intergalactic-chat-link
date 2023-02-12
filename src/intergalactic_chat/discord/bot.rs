@@ -70,6 +70,9 @@ impl EventHandler for DiscordHandler {
 						.create_application_command(|command| {
 							commands::network_ban::register(command)
 						})
+						.create_application_command(|command| {
+							commands::network_unban::register(command)
+						})
 				})
 				.await
 				.unwrap();
@@ -276,6 +279,11 @@ impl EventHandler for DiscordHandler {
 					.unwrap(),
 				"network-ban" => {
 					commands::network_ban::run(&command.data.options, &command, &context, &self)
+						.await
+						.unwrap()
+				}
+				"network-unban" => {
+					commands::network_unban::run(&command.data.options, &command, &context, &self)
 						.await
 						.unwrap()
 				}
