@@ -35,7 +35,7 @@ pub async fn get_link_webhook(
 /// Builds a reply embed using the type provided by [`serenity::model::Message::referenced_message`].
 ///
 /// Should only be used for webhooks.
-pub fn build_reply_for_webhook(rm: Box<Message>) -> serde_json::Value {
+pub fn build_reply_for_webhook(rm: &Box<Message>) -> serde_json::Value {
 	Embed::fake(|e| {
 		e.description(format!(
 			"**[Reply to:]({})** {}{}",
@@ -54,7 +54,7 @@ pub fn build_reply_for_webhook(rm: Box<Message>) -> serde_json::Value {
 		))
 		.footer(|e| {
 			e.icon_url(rm.author.face());
-			e.text(rm.author.name)
+			e.text(rm.author.name.to_owned())
 		})
 	})
 }
@@ -83,7 +83,7 @@ pub async fn execute_message_for_webhook(
 		// Add an embed for replies
 		message
 			.referenced_message
-			.map(|rm| wh.embeds(vec![build_reply_for_webhook(rm)]));
+			.map(|rm| wh.embeds(vec![build_reply_for_webhook(&rm)]));
 
 		wh
 	});
